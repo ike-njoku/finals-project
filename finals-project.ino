@@ -1,5 +1,8 @@
 #include "LSM6DS3.h"
 #include "Wire.h"
+#include <string>
+#include <WiFiS3.h>
+#include <R4HttpClient.h>
 
 struct SensorData {
   float ax;
@@ -24,6 +27,58 @@ void setupSensor() {
   Serial.println("LSM6DS3 Sensor Initialized Successfully!");
   Serial.println("----------------------------------------");
   Serial.println("Accel X (g) | Accel Y (g) | Accel Z (g) | Gyro X (dps) | Gyro Y (dps) | Gyro Z (dps)");
+};
+
+const char* WIFI_SSID     = "Glide_Resident";
+const char* WIFI_PASSWORD = "SkiesMarryMath";
+const char* CASSANDRA_API_URL = "http://192.168.1.100:5000/api/sensor-data";
+WiFiClient wifiClient;
+R4HttpClient http;
+
+void connectToWiFi() {
+  // Check if the onboard ESP32-S3 Wi-Fi module is responsive
+  if (WiFi.status() == WL_NO_MODULE) {
+    Serial.println(F("Fatal Error: Communication with WiFi module failed!"));
+    while (true); // Freeze execution if hardware is not responding
+  }
+
+  // Check firmware version (optional warning)
+  String firmwareVersion = WiFi.firmwareVersion();
+  if (firmwareVersion < WIFI_FIRMWARE_LATEST_VERSION) {
+    Serial.println(F("Notice: Please consider updating the Wi-Fi module firmware."));
+  }
+
+  Serial.print(F("Connecting to Wi-Fi network: "));
+  Serial.println(WIFI_SSID);
+
+  // Attempt connection
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  // Wait for connection with a timeout (15 seconds max)
+  uint8_t attempts = 0;
+  constexpr uint8_t MAX_ATTEMPTS = 30; // 30 * 500ms = 15 seconds
+
+  while (WiFi.status() != WL_CONNECTED && attempts < MAX_ATTEMPTS) {
+    delay(500);
+    Serial.print(F("."));
+    attempts++;
+  }
+
+  // Verify connection result
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println();
+    Serial.println(F("========================================"));
+    Serial.println(F(" Wi-Fi Connected Successfully!"));
+    Serial.print(F(" IP Address: "));
+    Serial.println(WiFi.localIP());
+    Serial.print(F(" Signal Strength (RSSI): "));
+    Serial.print(WiFi.RSSI());
+    Serial.println(F(" dBm"));
+    Serial.println(F("========================================"));
+  } else {
+    Serial.println();
+    Serial.println(F("Wi-Fi Connection Failed! Check SSID/Password or router proximity."));
+  }
 }
 
 SensorData collectSensorData() {
@@ -40,17 +95,26 @@ SensorData collectSensorData() {
   return sensorData;
 };
 
+void uploadSensorData(int user, std::string activity) {
 
+};
 
 void setup() {
   // Initialize serial communication at 115200 baud
   Serial.begin(115200);
   while (!Serial) {;}; // wait for serial to begin
-  setupSensor()
-}
-
+  // setupWIFI(); 
+  connectToWiFi();
+  setupSensor();
+};
 
 void loop() {
+  
+  if (Serial.available()) {
+    String name = Serial.readStringUntil('\n'); // Reads until you hit Enter
+    name.trim(); // Optional: removes trailing whitespace or newline characters
+    Serial.print(name);
+  }
 
   SensorData sensorData = collectSensorData();
   Serial.print("A: ");
