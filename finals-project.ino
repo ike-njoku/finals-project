@@ -31,7 +31,7 @@ void setupSensor() {
 
 const char* WIFI_SSID     = "Glide_Resident";
 const char* WIFI_PASSWORD = "SkiesMarryMath";
-const char* CASSANDRA_API_URL = "http://192.168.1.100:5000/api/sensor-data";
+const char* INFLUX_DB_URL = "http://192.168.1.100:5000/api/sensor-data";
 WiFiClient wifiClient;
 R4HttpClient http;
 
