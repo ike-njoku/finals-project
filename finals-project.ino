@@ -1,130 +1,97 @@
-#include "LSM6DS3.h"
-#include "Wire.h"
-#include <string>
+#include <Wire.h>
 #include <WiFiS3.h>
-#include <R4HttpClient.h>
+#include <WebSocketsClient.h>
+#include "LSM6DS3.h"
 
-struct SensorData {
-  float ax;
-  float ay;
-  float az;
+// #define WIFI_SSID     "ZWS Iphone"
+// #define WIFI_PASSWORD "zwsiphone"
 
-  float gx;
-  float gy;
-  float gz;
-};
 
-// Create an instance of the LSM6DS3 sensor using I2C (Address 0x6A)
-LSM6DS3 sensor(I2C_MODE, 0x6A);
 
-void setupSensor() {
- // Initialize the sensor
-  if (sensor.begin() != 0) {
-    Serial.println("Error: Failed to initialize LSM6DS3 accelerometer/gyroscope!");
-    while (1); // stop execution if sensor is not detected
-  }
-  
-  Serial.println("LSM6DS3 Sensor Initialized Successfully!");
-  Serial.println("----------------------------------------");
-  Serial.println("Accel X (g) | Accel Y (g) | Accel Z (g) | Gyro X (dps) | Gyro Y (dps) | Gyro Z (dps)");
-};
+#define WIFI_SSID     "Glide_Resident"
+#define WIFI_PASSWORD "SkiesMarryMath"
 
-const char* WIFI_SSID     = "Glide_Resident";
-const char* WIFI_PASSWORD = "SkiesMarryMath";
-const char* INFLUX_DB_URL = "http://192.168.1.100:5000/api/sensor-data";
-WiFiClient wifiClient;
-R4HttpClient http;
+// REPLACE 'X' WITH YOUR COMPUTER'S LOCAL IP ADDRESS ON THE HOTSPOT
+const char* websockets_server_host = "10.133.215.60"; 
+const uint16_t websockets_server_port = 5001;
 
-void connectToWiFi() {
-  // Check if the onboard ESP32-S3 Wi-Fi module is responsive
-  if (WiFi.status() == WL_NO_MODULE) {
-    Serial.println(F("Fatal Error: Communication with WiFi module failed!"));
-    while (true); // Freeze execution if hardware is not responding
-  }
+LSM6DS3 imu(I2C_MODE, 0x6A);
+WebSocketsClient webSocket;
 
-  // Check firmware version (optional warning)
-  String firmwareVersion = WiFi.firmwareVersion();
-  if (firmwareVersion < WIFI_FIRMWARE_LATEST_VERSION) {
-    Serial.println(F("Notice: Please consider updating the Wi-Fi module firmware."));
-  }
+const unsigned long SEND_INTERVAL = 1000UL;
+unsigned long lastSendTime = 0;
+bool isWebSocketConnected = false;
 
-  Serial.print(F("Connecting to Wi-Fi network: "));
-  Serial.println(WIFI_SSID);
+// Event handler to track connection status
+void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
+  switch(type) {
+    case WStype_DISCONNECTED:
+      Serial.println("[WebSocket] Disconnected!");
+      isWebSocketConnected = false;
+      break;
+    case WStype_CONNECTED:
+      Serial.print("[WebSocket] Connected to url: %s\n");
+      // Serial.print( payload);
+      isWebSocketConnected = true;
+      break;
+    case WStype_TEXT:
+      Serial.print("[WebSocket] Received text: %s\n");
+      // Serial.print( payload);
 
-  // Attempt connection
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  // Wait for connection with a timeout (15 seconds max)
-  uint8_t attempts = 0;
-  constexpr uint8_t MAX_ATTEMPTS = 30; // 30 * 500ms = 15 seconds
-
-  while (WiFi.status() != WL_CONNECTED && attempts < MAX_ATTEMPTS) {
-    delay(500);
-    Serial.print(F("."));
-    attempts++;
-  }
-
-  // Verify connection result
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println();
-    Serial.println(F("========================================"));
-    Serial.println(F(" Wi-Fi Connected Successfully!"));
-    Serial.print(F(" IP Address: "));
-    Serial.println(WiFi.localIP());
-    Serial.print(F(" Signal Strength (RSSI): "));
-    Serial.print(WiFi.RSSI());
-    Serial.println(F(" dBm"));
-    Serial.println(F("========================================"));
-  } else {
-    Serial.println();
-    Serial.println(F("Wi-Fi Connection Failed! Check SSID/Password or router proximity."));
+      break;
+    default:
+      break;
   }
 }
 
-SensorData collectSensorData() {
-  // Read Accelerometer values (measured in g-force)
-  SensorData sensorData;
-  sensorData.ax = sensor.readFloatAccelX();
-  sensorData.ay = sensor.readFloatAccelY();
-  sensorData.az = sensor.readFloatAccelZ();
-
-  // Read Gyroscope values (measured in degrees per second - dps)
-  sensorData.gx = sensor.readFloatGyroX();
-  sensorData.gy = sensor.readFloatGyroY();
-  sensorData.gz = sensor.readFloatGyroZ();
-  return sensorData;
-};
-
-void uploadSensorData(int user, std::string activity) {
-
-};
-
 void setup() {
-  // Initialize serial communication at 115200 baud
   Serial.begin(115200);
-  while (!Serial) {;}; // wait for serial to begin
-  // setupWIFI(); 
-  connectToWiFi();
-  setupSensor();
-};
+  delay(1500);
 
-void loop() {
-  
-  if (Serial.available()) {
-    String name = Serial.readStringUntil('\n'); // Reads until you hit Enter
-    name.trim(); // Optional: removes trailing whitespace or newline characters
-    Serial.print(name);
+  Wire.begin();
+  if (imu.begin() != 0) {
+    Serial.println("IMU Error!");
+    while (1);
   }
 
-  SensorData sensorData = collectSensorData();
-  Serial.print("A: ");
-  Serial.print(sensorData.ax, 3); Serial.print("\t");
-  Serial.print(sensorData.ay, 3); Serial.print("\t");
-  Serial.print(sensorData.az, 3); Serial.print("\t|\tG: ");
-  Serial.print(sensorData.gx, 2); Serial.print("\t");
-  Serial.print(sensorData.gy, 2); Serial.print("\t");
-  Serial.println(sensorData.gz, 2);
+  // Connect to Wi-Fi
+  Serial.print("Connecting to WiFi");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected! IP: " + WiFi.localIP().toString());
 
-  // Delay 100ms (~10Hz sample rate) ---->>> change to 20hz (confirm from prof whether we can collect our own data at 20hz to match WISDM)
-  delay(100);
+  // Initialize WebSocket connection to Node.js server
+  webSocket.begin(websockets_server_host, websockets_server_port, "/");
+  webSocket.onEvent(webSocketEvent);
+  webSocket.setReconnectInterval(5000); // Auto retry connection every 5s if disconnected
+}
+
+void loop() {
+  // Required: handles WebSocket keep-alives and incoming frames
+  webSocket.loop(); 
+
+  unsigned long now = millis();
+  if (now - lastSendTime >= SEND_INTERVAL) {
+    lastSendTime = now;
+
+    if (isWebSocketConnected) {
+      float ax = imu.readFloatAccelX();
+      float ay = imu.readFloatAccelY();
+      float az = imu.readFloatAccelZ();
+      float gx = imu.readFloatGyroX();
+      float gy = imu.readFloatGyroY();
+      float gz = imu.readFloatGyroZ();
+
+      String line = String(now) + "," + String(ax, 3) + "," + String(ay, 3) + "," + 
+                    String(az, 3) + "," + String(gx, 3) + "," + String(gy, 3) + "," + 
+                    String(gz, 3) + "," + String(WiFi.RSSI());
+
+      // Send text frame over WebSocket
+      webSocket.sendTXT(line);
+      Serial.println("Sent WebSocket message: " + line);
+    }
+  }
 }
