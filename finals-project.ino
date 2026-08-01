@@ -6,8 +6,6 @@
 // #define WIFI_SSID     "ZWS Iphone"
 // #define WIFI_PASSWORD "zwsiphone"
 
-
-
 #define WIFI_SSID     "Glide_Resident"
 #define WIFI_PASSWORD "SkiesMarryMath"
 

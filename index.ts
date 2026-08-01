@@ -7,6 +7,8 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+import { networkInterfaces } from "os";
+
 // --- Types ---
 interface SensorLog {
   pc_timestamp: string;
@@ -20,6 +22,13 @@ interface SensorLog {
   rssi: string;
 }
 
+const logInfoToConsole = (message: string) => {
+  const timestamp = new Date().toISOString();
+  console.log("------------------------------------------------");
+  console.log(` ${timestamp} - ${message}`);
+  console.log("------------------------------------------------");
+};
+
 const createSessionCSV = async (): Promise<string> => {
   const safeTimestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const fileName = `sensor_log_${safeTimestamp}.csv`;
@@ -30,7 +39,7 @@ const createSessionCSV = async (): Promise<string> => {
   // Use async writeFile with await
   await fs.writeFile(filePath, csvHeaders, "utf8");
 
-  console.log(`Created new CSV file: ${fileName}`);
+  logInfoToConsole(`Created new CSV file: ${fileName}`);
   return filePath;
 };
 
@@ -39,10 +48,10 @@ const logSensorData = async (
   log: SensorLog,
 ): Promise<void> => {
   try {
-    // 1. Format the SensorLog object into a CSV row string
+    // Format the SensorLog object into a CSV row string
     const csvRow = `${log.pc_timestamp},${log.arduino_ms},${log.ax},${log.ay},${log.az},${log.gx},${log.gy},${log.gz},${log.rssi}\n`;
 
-    // 2. Append the row to the file specified by filePath asynchronously
+    // Append the row to the file specified by filePath asynchronously
     return await fs.appendFile(filePath, csvRow, "utf8");
   } catch (error) {
     console.error(`Error appending sensor data to ${filePath}:`, error);
@@ -59,40 +68,6 @@ interface ErrorResponse {
 
 // --- Express App Setup ---
 const app = express();
-app.use(express.json());
-
-const router = express.Router();
-router.post(
-  "/logs",
-  async (
-    req: Request<{}, {}, SensorLog>,
-    res: Response<LogResponse | ErrorResponse>,
-  ) => {
-    const { pc_timestamp, arduino_ms, ax, ay, az, gx, gy, gz, rssi } = req.body;
-
-    if (
-      !pc_timestamp ||
-      !arduino_ms ||
-      !ax ||
-      !ay ||
-      !az ||
-      !gx ||
-      !gy ||
-      !gz ||
-      !rssi
-    ) {
-      return res.status(400).json({ error: "Incomplete sample" });
-    }
-
-    return res.status(201).json({ status: "success" });
-  },
-);
-
-router.get("/ping", (_req: Request, res: Response) => {
-  res.send({ message: "Pinged!!!!" });
-});
-
-app.use(router);
 
 // --- HTTP & WebSocket Server Setup ---
 const PORT = Number(process.env.PORT) || 5001;
@@ -101,11 +76,31 @@ const HOST = "0.0.0.0"; // Allows external local network devices (like Arduino) 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
+let activeConnections = 0;
+const connectedNodes = {
+  "Lower Lumber": false,
+  "Anterior Thigh": false,
+  "Sub-Patellar Shank": false,
+};
+
 wss.on("connection", async (ws: WebSocket, req) => {
   const clientIp = req.socket.remoteAddress;
-  console.log("------------starting new session ---------------");
-  console.log(`[WebSocket] Client connected from ${clientIp}`);
-  console.log("creating session csv");
+  activeConnections++;
+
+  if (activeConnections == 1) {
+    logInfoToConsole(`Lower Lumber node Connected from ${clientIp}`);
+    connectedNodes["Lower Lumber"] = true;
+  } else if (activeConnections == 2) {
+    logInfoToConsole(`Anterior Thigh node Connected from ${clientIp}`);
+    connectedNodes["Anterior Thigh"] = true;
+  } else if (activeConnections == 3) {
+    logInfoToConsole(`Sub-Patellar Shank node Connected from ${clientIp}`);
+    connectedNodes["Sub-Patellar Shank"] = true;
+  }
+
+  if (activeConnections < 2) return;
+  logInfoToConsole("Creating Session CSV for logging data logging...");
+
   const sessionCSV = await createSessionCSV();
 
   ws.on("message", (data: Buffer | string) => {
@@ -129,13 +124,15 @@ wss.on("connection", async (ws: WebSocket, req) => {
         rssi: parts[7],
       };
 
-      // Process or store your formatted sensor log object here
+      // log values
       logSensorData(sessionCSV, logData);
     }
   });
 
   ws.on("close", () => {
     console.log("[WebSocket] Client disconnected");
+    activeConnections--;
+    console.log(`[WebSocket] Connected nodes: ${activeConnections}`);
   });
 
   ws.on("error", (err) => {
@@ -143,8 +140,16 @@ wss.on("connection", async (ws: WebSocket, req) => {
   });
 });
 
-// --- Start Listening ---
 server.listen(PORT, HOST, () => {
-  console.log(`Server is running on http://${HOST}:${PORT}`);
+  console.log(
+    "\n\n\n\n\n\n\n\n------------------------------------------------",
+  );
+  console.log("------------------------------------------------");
+
   console.log(`WebSocket Server listening on ws://${HOST}:${PORT}`);
+  console.log("\n------------------------------------------------");
+
+  if (!activeConnections) {
+    console.log("Waiting for Lower Lumber Node to connect...");
+  }
 });
