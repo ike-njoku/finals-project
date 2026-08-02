@@ -2,16 +2,20 @@
 #include <WiFiS3.h>
 #include <WebSocketsClient.h>
 #include "LSM6DS3.h"
+#include <string>
+#include <ArduinoJson.h>
 
 // #define WIFI_SSID     "ZWS Iphone"
 // #define WIFI_PASSWORD "zwsiphone"
 
 #define WIFI_SSID     "Glide_Resident"
 #define WIFI_PASSWORD "SkiesMarryMath"
+#define SENSOR_PLACEMENT "Lumbar"
 
 // REPLACE 'X' WITH YOUR COMPUTER'S LOCAL IP ADDRESS ON THE HOTSPOT
 const char* websockets_server_host = "10.133.215.60"; 
 const uint16_t websockets_server_port = 5001;
+
 
 LSM6DS3 imu(I2C_MODE, 0x6A);
 WebSocketsClient webSocket;
@@ -19,6 +23,16 @@ WebSocketsClient webSocket;
 const unsigned long SEND_INTERVAL = 1000UL;
 unsigned long lastSendTime = 0;
 bool isWebSocketConnected = false;
+
+struct SensorLog {
+  String node;
+  float ax;
+  float ay;
+  float az;
+  float gx;
+  float gy;
+  float gz;
+};
 
 // Event handler to track connection status
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
@@ -76,20 +90,24 @@ void loop() {
     lastSendTime = now;
 
     if (isWebSocketConnected) {
-      float ax = imu.readFloatAccelX();
-      float ay = imu.readFloatAccelY();
-      float az = imu.readFloatAccelZ();
-      float gx = imu.readFloatGyroX();
-      float gy = imu.readFloatGyroY();
-      float gz = imu.readFloatGyroZ();
+      StaticJsonDocument<256> log;
 
-      String line = String(now) + "," + String(ax, 3) + "," + String(ay, 3) + "," + 
-                    String(az, 3) + "," + String(gx, 3) + "," + String(gy, 3) + "," + 
-                    String(gz, 3) + "," + String(WiFi.RSSI());
+      log["node"] = SENSOR_PLACEMENT;
+      log["timestamp"] = now;
+      log["ax"] = imu.readFloatAccelX();
+      log["ay"] = imu.readFloatAccelY();
+      log["az"] = imu.readFloatAccelZ();
+      log["gx"] = imu.readFloatGyroX();
+      log["gy"] = imu.readFloatGyroY();
+      log["gz"] = imu.readFloatGyroZ();
+      log["rssi"] = WiFi.RSSI();
 
-      // Send text frame over WebSocket
-      webSocket.sendTXT(line);
-      Serial.println("Sent WebSocket message: " + line);
+      String jsonPayload;
+      serializeJson(log, jsonPayload);
+      
+
+      webSocket.sendTXT(jsonPayload);
+      Serial.println("Sent WebSocket message: " + jsonPayload);
     }
   }
 }

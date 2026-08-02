@@ -23,10 +23,10 @@ interface SensorLog {
 }
 
 const logInfoToConsole = (message: string) => {
-  const timestamp = new Date().toISOString();
-  console.log("------------------------------------------------");
+  const timestamp = new Date().toUTCString();
+  console.log("--------------------------------------------------------");
   console.log(` ${timestamp} - ${message}`);
-  console.log("------------------------------------------------");
+  console.log("--------------------------------------------------------");
 };
 
 const createSessionCSV = async (): Promise<string> => {
@@ -130,9 +130,11 @@ wss.on("connection", async (ws: WebSocket, req) => {
   });
 
   ws.on("close", () => {
-    console.log("[WebSocket] Client disconnected");
+    logInfoToConsole(`Node disconnected from ${clientIp}`);
     activeConnections--;
-    console.log(`[WebSocket] Connected nodes: ${activeConnections}`);
+    logInfoToConsole(
+      `Stopping data logging. Active connections: ${activeConnections}`,
+    );
   });
 
   ws.on("error", (err) => {
@@ -141,15 +143,10 @@ wss.on("connection", async (ws: WebSocket, req) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(
-    "\n\n\n\n\n\n\n\n------------------------------------------------",
-  );
-  console.log("------------------------------------------------");
-
-  console.log(`WebSocket Server listening on ws://${HOST}:${PORT}`);
-  console.log("\n------------------------------------------------");
+  console.log("\n\n********************************************************\n");
+  logInfoToConsole(`WebSocket Server started on ws://${HOST}:${PORT}`);
 
   if (!activeConnections) {
-    console.log("Waiting for Lower Lumber Node to connect...");
+    logInfoToConsole("Waiting for Lower Lumber Node to connect...");
   }
 });
