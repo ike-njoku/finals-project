@@ -24,16 +24,6 @@ const unsigned long SEND_INTERVAL = 1000UL;
 unsigned long lastSendTime = 0;
 bool isWebSocketConnected = false;
 
-struct SensorLog {
-  String node;
-  float ax;
-  float ay;
-  float az;
-  float gx;
-  float gy;
-  float gz;
-};
-
 // Event handler to track connection status
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
