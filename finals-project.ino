@@ -1,3 +1,122 @@
+// #include <Wire.h>
+// #include <WiFiNINA.h>
+// #include <ArduinoHttpClient.h>
+// #include "LSM6DS3.h"
+// #include <ArduinoJson.h>
+
+// #define WIFI_SSID     "Glide_Resident"
+// #define WIFI_PASSWORD "SkiesMarryMath"
+
+// // Change this string per Arduino board: "Lumbar", "Thigh", or "Knee"
+// #define SENSOR_PLACEMENT "Thigh" 
+
+// const char* websockets_server_host = "10.133.215.60"; 
+// const uint16_t websockets_server_port = 5001;
+
+// LSM6DS3 imu(I2C_MODE, 0x6A);
+
+// WiFiClient wifiClient;
+// WebSocketClient webSocket = WebSocketClient(wifiClient, websockets_server_host, websockets_server_port);
+
+// const unsigned long SEND_INTERVAL = 20UL; // 50 Hz streaming (20ms interval)
+// unsigned long lastSendTime = 0;
+// bool sessionStarted = false; // Flag controlled by Python broadcast
+
+// void setup() {
+//   Serial.begin(9600);
+//   Wire.begin();
+  
+//   if (imu.begin() != 0) {
+//     Serial.println("IMU Error!");
+//     while (1);
+//   }
+
+//   Serial.print("Connecting to WiFi");
+//   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+//   while (WiFi.status() != WL_CONNECTED) {
+//     delay(500);
+//     Serial.print(".");
+//   }
+
+//   // Updated IP address printing lines:
+//   Serial.print("\nWiFi connected! IP: ");
+//   Serial.println(WiFi.localIP());
+
+//   Serial.println("Starting WebSocket connection...");
+//   webSocket.begin();
+// }
+
+// void loop() {
+//   // 1. Maintain connection
+//   if (!webSocket.connected()) {
+//     Serial.println("WebSocket Disconnected! Attempting reconnect...");
+//     webSocket.begin();
+//     delay(1000);
+//     return;
+//   }
+
+//   // 2. Check for incoming broadcast commands from Python server
+//   int messageSize = webSocket.parseMessage();
+//   if (messageSize > 0) {
+//     String payload = webSocket.readString();
+//     Serial.print("WebSocket Received Broadcast Payload: ");
+//     Serial.println(payload);
+
+//     StaticJsonDocument<128> doc;
+//     DeserializationError error = deserializeJson(doc, payload);
+
+//     if (error) {
+//       Serial.print("WebSocket Error JSON Deserialization failed: ");
+//       Serial.println(error.f_str());
+//     } else if (doc.containsKey("command")) {
+//       const char* command = doc["command"];
+
+//       if (strcmp(command, "START") == 0) {
+//         sessionStarted = true;
+//         Serial.println("==========================================");
+//         Serial.println(" EXPERIMENT STARTED - STREAMING DATA ");
+//         Serial.println("==========================================");
+//       } 
+//       else if (strcmp(command, "STOP") == 0) {
+//         sessionStarted = false;
+//         Serial.println("==========================================");
+//         Serial.println(" EXPERIMENT STOPPED - STREAMING PAUSED ");
+//         Serial.println("==========================================");
+//       }
+//     }
+//   }
+
+//   // 3. Stream IMU telemetry at 50 Hz (every 20ms)
+//   unsigned long now = millis();
+//   if (now - lastSendTime >= SEND_INTERVAL) {
+//     lastSendTime += SEND_INTERVAL;
+
+//     if (sessionStarted) {
+//       StaticJsonDocument<256> log;
+
+//       log["node"] = SENSOR_PLACEMENT;
+//       log["timestamp"] = now;
+//       log["ax"] = imu.readFloatAccelX();
+//       log["ay"] = imu.readFloatAccelY();
+//       log["az"] = imu.readFloatAccelZ();
+//       log["gx"] = imu.readFloatGyroX();
+//       log["gy"] = imu.readFloatGyroY();
+//       log["gz"] = imu.readFloatGyroZ();
+//       log["rssi"] = WiFi.RSSI();
+
+//       String jsonPayload;
+//       serializeJson(log, jsonPayload);
+
+//       // Send text frame over WebSocket (0x01 = TEXT frame)
+//       webSocket.beginMessage(0x01);
+//       webSocket.print(jsonPayload);
+//       webSocket.endMessage();
+//     }
+//   }
+// }
+
+// ------------------------ ARDUINO UNO R4 BELOW ---------------------------------
+
 #include <Wire.h>
 #include <WiFiS3.h>
 #include <WebSocketsClient.h>
@@ -8,7 +127,7 @@
 #define WIFI_PASSWORD "SkiesMarryMath"
 
 // Change this string per Arduino board: "Lumbar", "Thigh", or "Knee"
-#define SENSOR_PLACEMENT "Knee" 
+#define SENSOR_PLACEMENT "Lumbar" 
 
 const char* websockets_server_host = "10.133.215.60"; 
 const uint16_t websockets_server_port = 5001;
@@ -101,7 +220,7 @@ void loop() {
 
   unsigned long now = millis();
   if (now - lastSendTime >= SEND_INTERVAL) {
-    lastSendTime = now;
+    lastSendTime += SEND_INTERVAL;
 
     // Only transmit data if node is connected AND server issued START command
     if (webSocketIsConnected && sessionStarted) {
