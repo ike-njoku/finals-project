@@ -18,30 +18,49 @@ frame_timeout_task = None
 
 connected_sockets = set()
 experiment_running = False
+
 session_folder_path: Path = None
+current_activity: str = "unlabeled"
 
 
-def create_session_folder() -> Path:
-    """Creates a dedicated directory named with the current timestamp."""
-    # Folder name format: YYYY-MM-DD_HH-MM-SS
-    folder_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    folder_path = Path(__file__).parent / folder_timestamp
+def get_data_dir() -> Path:
+    """Returns the base /data directory, creating it if necessary."""
+    data_dir = Path(__file__).parent / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
 
-    # Create the folder if it doesn't exist
-    folder_path.mkdir(parents=True, exist_ok=True)
-    print(f"\n[SESSION CREATED]: Log directory initialized at -> {folder_path.resolve()}\n")
-    return folder_path
+
+def get_next_user_id() -> str:
+    """
+    Calculates default user ID based on immediate subdirectories in /data/.
+    If empty, returns 'user_1'.
+    """
+    data_dir = get_data_dir()
+    subdirs = [d for d in data_dir.iterdir() if d.is_dir()]
+    return f"user_{len(subdirs) + 1}"
+
+
+def close_all_file_handles():
+    """Safely flushes, syncs, and closes all open CSV file handles."""
+    global open_file_handles
+    for f in open_file_handles.values():
+        try:
+            f.flush()
+            os.fsync(f.fileno())
+            f.close()
+        except Exception:
+            pass
+    open_file_handles.clear()
 
 
 def get_or_create_node_file(node_name: str) -> object:
     """
-    Returns an open file handle for a node inside the session folder.
+    Returns an open file handle for a node inside /data/{user_id}/{activity}/.
     Creates the CSV file and writes headers if it doesn't exist yet.
     """
     formatted_name = node_name.lower().replace(" ", "_")
 
     if formatted_name not in open_file_handles:
-        # File path inside the session directory: {session_folder}/session-lumbar.csv
         file_name = f"session-{formatted_name}.csv"
         file_path = session_folder_path / file_name
 
@@ -52,14 +71,14 @@ def get_or_create_node_file(node_name: str) -> object:
 
         if not file_exists:
             headers = [
-                "pc_timestamp", "arduino_ms", "node_position",
+                "pc_timestamp", "arduino_ms", "node_position", "activity",
                 "ax", "ay", "az", "gx", "gy", "gz", "rssi"
             ]
             f.write(",".join(headers) + "\n")
             f.flush()
-            os.fsync(f.fileno())  # Force OS buffer commit to hardware
+            os.fsync(f.fileno())
 
-            print(f"[CSV Created]: {file_path.name} inside folder '{session_folder_path.name}'")
+            print(f"[CSV Created]: {file_path.relative_to(get_data_dir().parent)}")
 
         open_file_handles[formatted_name] = f
 
@@ -80,17 +99,15 @@ async def flush_all_nodes_parallel():
     """
     global current_frame_buffer, frame_timeout_task
 
-    if not current_frame_buffer:
+    if not current_frame_buffer or not experiment_running:
         return
 
     pc_timestamp = int(time.time() * 1000)
 
-    # Cancel background safety timer task if running
     if frame_timeout_task and not frame_timeout_task.done():
         frame_timeout_task.cancel()
         frame_timeout_task = None
 
-    # Take a copy of the current buffer and reset memory state
     snapshot = current_frame_buffer.copy()
     current_frame_buffer.clear()
 
@@ -103,6 +120,7 @@ async def flush_all_nodes_parallel():
             str(pc_timestamp),
             str(data.get("timestamp", "")),
             str(node_name),
+            str(current_activity),
             str(data.get("ax", "")),
             str(data.get("ay", "")),
             str(data.get("az", "")),
@@ -113,12 +131,10 @@ async def flush_all_nodes_parallel():
         ]
         line_to_write = ",".join(row) + "\n"
 
-        # Queue write task to execute in parallel thread pool
         write_tasks.append(
             asyncio.to_thread(atomic_append_row, file_handle, line_to_write)
         )
 
-    # Execute all file writes concurrently
     await asyncio.gather(*write_tasks, return_exceptions=True)
 
 
@@ -146,31 +162,70 @@ async def broadcast_command(command: str):
 
 
 async def terminal_input_loop():
-    """Asynchronous CLI input task."""
-    global experiment_running
+    """CLI loop for handling START/STOP commands, user IDs, and activities."""
+    global experiment_running, session_folder_path, current_activity
 
     print("\n=======================================================")
-    print("Press ENTER or type START to begin recording.")
-    print("Type STOP to pause recording.")
+    print("Commands:")
+    print("  START (or press ENTER) -> Begin new recording session")
+    print("  STOP                   -> Stop current recording session")
     print("=======================================================\n")
 
     while True:
-        user_input = await asyncio.to_thread(input, "Terminal Prompt > ")
-        cmd = user_input.strip().upper()
+        cmd_input = await asyncio.to_thread(input, "Terminal Prompt > ")
+        cmd = cmd_input.strip().upper()
 
         if cmd == "" or cmd == "START":
+            if experiment_running:
+                print("[WARNING] Session already running! Type 'STOP' first.")
+                continue
+
+            # 1. Prompt for User ID
+            default_user = get_next_user_id()
+            user_input = await asyncio.to_thread(
+                input, f"Enter User ID [default: {default_user}]: "
+            )
+            user_input = user_input.strip()
+
+            if not user_input:
+                user_id = default_user
+            else:
+                user_id = user_input if user_input.startswith("user_") else f"user_{user_input}"
+
+            # 2. Prompt for Activity
+            act_input = await asyncio.to_thread(
+                input, "Enter Activity (e.g., tug, walk, sit, stand) [default: walk]: "
+            )
+            act_input = act_input.strip().lower().replace(" ", "_")
+            current_activity = act_input if act_input else "walk"
+
+            # 3. Setup Target Directory: /data/{user_id}/{activity}/
+            session_folder_path = get_data_dir() / user_id / current_activity
+            session_folder_path.mkdir(parents=True, exist_ok=True)
+
+            print(f"\n[SESSION INITIALIZED]")
+            print(f" -> Folder:   {session_folder_path.resolve()}")
+            print(f" -> User ID:  {user_id}")
+            print(f" -> Activity: {current_activity}\n")
+
             experiment_running = True
             await broadcast_command("START")
+
         elif cmd == "STOP":
+            if not experiment_running:
+                print("[INFO] No active session to stop.")
+                continue
+
             experiment_running = False
             await broadcast_command("STOP")
-            print("[INFO] Experiment stopped. Data logging paused.")
+            close_all_file_handles()
+            print("[INFO] Recording stopped. File handles closed and synced to disk.\n")
         else:
             print(f"[UNKNOWN COMMAND]: '{cmd}'. Use 'START' or 'STOP'.")
 
 
 async def handle_incoming_data(data: dict):
-    """Buffers data per node and triggers parallel writes."""
+    """Buffers incoming telemetry and triggers parallel disk writes."""
     global frame_timeout_task
 
     if not experiment_running:
@@ -178,13 +233,11 @@ async def handle_incoming_data(data: dict):
 
     node_name = data.get("node", "unknown")
 
-    # Flush window if current node already sent data in this window
     if node_name in current_frame_buffer:
         await flush_all_nodes_parallel()
 
     current_frame_buffer[node_name] = data
 
-    # Trigger parallel writes when all expected nodes have reported
     if all(node in current_frame_buffer for node in EXPECTED_NODES):
         await flush_all_nodes_parallel()
     else:
@@ -211,12 +264,7 @@ async def websocket_handler(websocket):
 
 
 async def main():
-    global session_folder_path
-    
-    # Initialize the date-stamped folder
-    session_folder_path = create_session_folder()
-
-    # Start CLI task
+    get_data_dir()
     asyncio.create_task(terminal_input_loop())
 
     try:
@@ -224,15 +272,8 @@ async def main():
             print(f"WebSocket Server listening on port {PORT}")
             await asyncio.Future()
     finally:
-        # Safely flush and close all file handles on server shutdown
         print("\nClosing open CSV file handles...")
-        for f in open_file_handles.values():
-            try:
-                f.flush()
-                os.fsync(f.fileno())
-                f.close()
-            except Exception:
-                pass
+        close_all_file_handles()
 
 
 if __name__ == "__main__":
