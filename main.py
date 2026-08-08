@@ -2,20 +2,14 @@ import asyncio
 import json
 import os
 import time
-from datetime import datetime
 from pathlib import Path
 import websockets
 
 # Configuration
 PORT = 5001
-EXPECTED_NODES = ["Lumbar", "Thigh", "Knee"]  # Adjust to match your node names
-BUFFER_TIMEOUT_SECONDS = 0.035  # 35ms safety timeout buffer for 50Hz (20ms)
 
 # Global State
 open_file_handles = {}
-current_frame_buffer = {}
-frame_timeout_task = None
-
 connected_sockets = set()
 experiment_running = False
 
@@ -31,10 +25,7 @@ def get_data_dir() -> Path:
 
 
 def get_next_user_id() -> str:
-    """
-    Calculates default user ID based on immediate subdirectories in /data/.
-    If empty, returns 'user_1'.
-    """
+    """Calculates default user ID based on immediate subdirectories in /data/."""
     data_dir = get_data_dir()
     subdirs = [d for d in data_dir.iterdir() if d.is_dir()]
     return f"user_{len(subdirs) + 1}"
@@ -54,10 +45,7 @@ def close_all_file_handles():
 
 
 def get_or_create_node_file(node_name: str) -> object:
-    """
-    Returns an open file handle for a node inside /data/{user_id}/{activity}/.
-    Creates the CSV file and writes headers if it doesn't exist yet.
-    """
+    """Returns an open file handle for a node inside /data/{user_id}/{activity}/."""
     formatted_name = node_name.lower().replace(" ", "_")
 
     if formatted_name not in open_file_handles:
@@ -65,8 +53,6 @@ def get_or_create_node_file(node_name: str) -> object:
         file_path = session_folder_path / file_name
 
         file_exists = file_path.exists()
-
-        # Open file handle with line buffering (buffering=1)
         f = open(file_path, "a", encoding="utf-8", buffering=1)
 
         if not file_exists:
@@ -85,66 +71,11 @@ def get_or_create_node_file(node_name: str) -> object:
     return open_file_handles[formatted_name]
 
 
-def atomic_append_row(f, line: str):
-    """Appends a single CSV row atomically to disk."""
-    f.write(line)
+def atomic_append_batch(f, batch_text: str):
+    """Appends an entire batch of CSV rows atomically to disk."""
+    f.write(batch_text)
     f.flush()
     os.fsync(f.fileno())
-
-
-async def flush_all_nodes_parallel():
-    """
-    Triggers concurrent, parallel atomic disk writes 
-    for all buffered node data at the exact same instant.
-    """
-    global current_frame_buffer, frame_timeout_task
-
-    if not current_frame_buffer or not experiment_running:
-        return
-
-    pc_timestamp = int(time.time() * 1000)
-
-    if frame_timeout_task and not frame_timeout_task.done():
-        frame_timeout_task.cancel()
-        frame_timeout_task = None
-
-    snapshot = current_frame_buffer.copy()
-    current_frame_buffer.clear()
-
-    write_tasks = []
-
-    for node_name, data in snapshot.items():
-        file_handle = get_or_create_node_file(node_name)
-
-        row = [
-            str(pc_timestamp),
-            str(data.get("timestamp", "")),
-            str(node_name),
-            str(current_activity),
-            str(data.get("ax", "")),
-            str(data.get("ay", "")),
-            str(data.get("az", "")),
-            str(data.get("gx", "")),
-            str(data.get("gy", "")),
-            str(data.get("gz", "")),
-            str(data.get("rssi", ""))
-        ]
-        line_to_write = ",".join(row) + "\n"
-
-        write_tasks.append(
-            asyncio.to_thread(atomic_append_row, file_handle, line_to_write)
-        )
-
-    await asyncio.gather(*write_tasks, return_exceptions=True)
-
-
-async def timeout_worker():
-    """Flushes buffered frames if one node delays or drops packet."""
-    try:
-        await asyncio.sleep(BUFFER_TIMEOUT_SECONDS)
-        await flush_all_nodes_parallel()
-    except asyncio.CancelledError:
-        pass
 
 
 async def broadcast_command(command: str):
@@ -225,24 +156,40 @@ async def terminal_input_loop():
 
 
 async def handle_incoming_data(data: dict):
-    """Buffers incoming telemetry and triggers parallel disk writes."""
-    global frame_timeout_task
-
+    """Unpacks batched sensor array and appends all 10 rows to disk."""
     if not experiment_running:
         return
 
     node_name = data.get("node", "unknown")
+    samples = data.get("samples", [])
 
-    if node_name in current_frame_buffer:
-        await flush_all_nodes_parallel()
+    if not samples:
+        return
 
-    current_frame_buffer[node_name] = data
+    pc_timestamp = int(time.time() * 1000)
+    file_handle = get_or_create_node_file(node_name)
 
-    if all(node in current_frame_buffer for node in EXPECTED_NODES):
-        await flush_all_nodes_parallel()
-    else:
-        if frame_timeout_task is None or frame_timeout_task.done():
-            frame_timeout_task = asyncio.create_task(timeout_worker())
+    lines = []
+    for sample in samples:
+        row = [
+            str(pc_timestamp),
+            str(sample.get("timestamp", "")),
+            str(node_name),
+            str(current_activity),
+            str(sample.get("ax", "")),
+            str(sample.get("ay", "")),
+            str(sample.get("az", "")),
+            str(sample.get("gx", "")),
+            str(sample.get("gy", "")),
+            str(sample.get("gz", "")),
+            str(sample.get("rssi", ""))
+        ]
+        lines.append(",".join(row))
+
+    batch_text = "\n".join(lines) + "\n"
+
+    # Write all 10 rows to disk in a single I/O operation
+    await asyncio.to_thread(atomic_append_batch, file_handle, batch_text)
 
 
 async def websocket_handler(websocket):
