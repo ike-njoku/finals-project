@@ -4,13 +4,18 @@
 #include "LSM6DS3.h"
 #include <ArduinoJson.h>
 
-#define WIFI_SSID     "Glide_Resident"
-#define WIFI_PASSWORD "SkiesMarryMath"
+#define WIFI_SSID     "Abcd"
+#define WIFI_PASSWORD "guavanetwork"
+
+// #define WIFI_SSID     "ZWS Iphone"
+// #define WIFI_PASSWORD "zwsiphone"
 
 // Name of this specific sensor on your body ("Lumbar", "Thigh", or "Knee")
-#define SENSOR_PLACEMENT "Knee" 
+#define SENSOR_PLACEMENT "Lumbar" 
 
-const char* websockets_server_host = "10.133.215.60"; 
+// const char* websockets_server_host = "10.133.215.60"; 
+const char* websockets_server_host = "10.37.92.26"; 
+
 const uint16_t websockets_server_port = 5001;
 
 LSM6DS3 imu(I2C_MODE, 0x6A);
