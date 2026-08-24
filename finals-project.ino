@@ -4,8 +4,8 @@
 #include "LSM6DS3.h"
 #include <ArduinoJson.h>
 
-#define WIFI_SSID     "Galaxy A36 5G 269C"
-#define WIFI_PASSWORD "Kemi1234"
+#define WIFI_SSID     "Glide_Resident"
+#define WIFI_PASSWORD "SkiesMarryMath"
 
 // #define WIFI_SSID     "ZWS Iphone"
 // #define WIFI_PASSWORD "zwsiphone"
@@ -14,7 +14,7 @@
 #define SENSOR_PLACEMENT "Knee" 
 
 // const char* websockets_server_host = "10.133.215.60"; 
-const char* websockets_server_host = "172.23.167.163"; 
+const char* websockets_server_host = "10.133.215.60"; 
 
 const uint16_t websockets_server_port = 5001;
 

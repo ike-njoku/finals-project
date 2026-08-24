@@ -14,7 +14,7 @@ from typing import Any, TextIO
 import joblib
 import numpy as np
 from aiohttp import WSMsgType, web
-from scipy.signal import butter, sosfiltfilt
+from scipy.signal import butter, find_peaks, sosfiltfilt
 
 
 # =============================================================================
@@ -46,6 +46,23 @@ WINDOW_STEP = int(WINDOW_SIZE * (1 - OVERLAP_RATIO))
 
 LOWPASS_CUTOFF_HZ = 4.0
 FILTER_ORDER = 4
+
+# Live step-detection configuration.
+MIN_STEP_INTERVAL_SECONDS = 0.30
+STEP_PROMINENCE_STD_MULTIPLIER = 0.50
+MIN_STEP_PROMINENCE = 1e-6
+
+# Number of consecutive predictions required before a new activity state is
+# accepted for transition tracking.
+ACTIVITY_CONFIRMATION_WINDOWS = 2
+
+# Activity changes reported as explicit mobility transitions.
+TRACKED_TRANSITIONS = {
+    ("sit", "stand"): "SIT → STAND",
+    ("stand", "sit"): "STAND → SIT",
+    ("stand", "walk"): "STAND → WALK",
+    ("walk", "stand"): "WALK → STAND",
+}
 
 CSV_HEADERS = (
     "pc_timestamp",
@@ -83,6 +100,19 @@ class PredictionResult:
     confidence: float
     probabilities: dict[str, float]
     latency_ms: float
+    created_at_ms: int
+
+
+@dataclass
+class TransitionEvent:
+    """One confirmed activity transition and its estimated detection duration."""
+
+    label: str
+    from_activity: str
+    to_activity: str
+    started_at_elapsed_seconds: float
+    completed_at_elapsed_seconds: float
+    duration_seconds: float
     created_at_ms: int
 
 
@@ -303,28 +333,47 @@ def decode_model_class(raw_class: Any, classes: list[str]) -> str:
 
 
 class InferenceEngine:
-    """Buffer three IMU streams, build windows, and run live RF inference."""
+    """Buffer IMU streams, classify activities, and track live session metrics."""
 
     def __init__(self, bundle: ModelBundle):
         self.bundle = bundle
         self.filter_sos = build_lowpass_filter(bundle)
         self.node_buffers = {node: deque() for node in REQUIRED_NODES}
         self.window_buffer: deque[np.ndarray] = deque(maxlen=bundle.window_size)
-        self.samples_since_prediction = 0
-        self.has_predicted = False
+        self.transition_history: deque[TransitionEvent] = deque(maxlen=100)
+        self.reset()
 
     def reset(self) -> None:
-        """Clear every live buffer before a new inference session."""
+        """Clear buffers and start a fresh real-time inference session."""
 
         for buffer in self.node_buffers.values():
             buffer.clear()
 
         self.window_buffer.clear()
+        self.transition_history.clear()
+        self.transition_stats = {
+            transition_pair: {
+                "count": 0,
+                "total_duration_seconds": 0.0,
+                "latest_duration_seconds": None,
+            }
+            for transition_pair in TRACKED_TRANSITIONS
+        }
         self.samples_since_prediction = 0
         self.has_predicted = False
+        self.step_count = 0
+        self.stable_activity: str | None = None
+        self.candidate_activity: str | None = None
+        self.candidate_activity_count = 0
+        self.candidate_activity_started_at: float | None = None
+        self.session_started_at = time.monotonic()
 
-    def add_samples(self, node: str, samples: list[dict[str, Any]]) -> PredictionResult | None:
-        """Add one sensor batch and return a new prediction when a window is ready."""
+    def add_samples(
+        self,
+        node: str,
+        samples: list[dict[str, Any]],
+    ) -> PredictionResult | None:
+        """Add one sensor batch and predict when a complete window is ready."""
 
         if node not in self.node_buffers:
             return None
@@ -342,11 +391,75 @@ class InferenceEngine:
         return latest_prediction
 
     def get_buffer_status(self) -> dict[str, int]:
-        """Return current node and model-window buffer lengths for the UI."""
+        """Return current raw-node and model-window buffer lengths."""
 
         status = {node: len(buffer) for node, buffer in self.node_buffers.items()}
         status["window"] = len(self.window_buffer)
         return status
+
+    def get_session_metrics(self) -> dict[str, Any]:
+        """Return live metrics and transition history for the dashboard."""
+
+        latest_transition = self.transition_history[-1] if self.transition_history else None
+
+        return {
+            "elapsed_seconds": self.get_elapsed_seconds(),
+            "step_count": self.step_count,
+            "stable_activity": self.stable_activity,
+            "transition_count": len(self.transition_history),
+            "latest_transition": (
+                self._serialise_transition(latest_transition)
+                if latest_transition is not None
+                else None
+            ),
+            "transition_summary": self._build_transition_summary(),
+            "transition_history": [
+                self._serialise_transition(event)
+                for event in self.transition_history
+            ],
+        }
+
+    def _serialise_transition(self, event: TransitionEvent) -> dict[str, Any]:
+        """Convert a transition event into JSON-safe dashboard data."""
+
+        return {
+            "label": event.label,
+            "from_activity": event.from_activity,
+            "to_activity": event.to_activity,
+            "started_at_elapsed_seconds": event.started_at_elapsed_seconds,
+            "completed_at_elapsed_seconds": event.completed_at_elapsed_seconds,
+            "duration_seconds": event.duration_seconds,
+            "created_at_ms": event.created_at_ms,
+        }
+
+    def _build_transition_summary(self) -> dict[str, dict[str, Any]]:
+        """Summarise count and duration statistics for every tracked transition."""
+
+        summary: dict[str, dict[str, Any]] = {}
+
+        for transition_pair, label in TRACKED_TRANSITIONS.items():
+            stats = self.transition_stats[transition_pair]
+            count = int(stats["count"])
+            total_duration = float(stats["total_duration_seconds"])
+            key = f"{transition_pair[0]}_to_{transition_pair[1]}"
+
+            summary[key] = {
+                "label": label,
+                "count": count,
+                "latest_duration_seconds": stats["latest_duration_seconds"],
+                "average_duration_seconds": (
+                    total_duration / count
+                    if count > 0
+                    else None
+                ),
+            }
+
+        return summary
+
+    def get_elapsed_seconds(self) -> float:
+        """Return monotonic elapsed time since this inference session started."""
+
+        return max(0.0, time.monotonic() - self.session_started_at)
 
     def _sample_is_valid(self, sample: dict[str, Any]) -> bool:
         """Check that a sample contains numeric values for all six IMU channels."""
@@ -376,7 +489,7 @@ class InferenceEngine:
         return aligned_samples
 
     def _add_aligned_sample(self, sample: np.ndarray) -> PredictionResult | None:
-        """Append one 18-channel sample and predict at the configured window step."""
+        """Append one aligned sample and predict at the configured window step."""
 
         self.window_buffer.append(sample)
 
@@ -386,7 +499,7 @@ class InferenceEngine:
         if not self.has_predicted:
             self.has_predicted = True
             self.samples_since_prediction = 0
-            return self._predict_current_window()
+            return self._predict_current_window(is_first_prediction=True)
 
         self.samples_since_prediction += 1
 
@@ -394,10 +507,10 @@ class InferenceEngine:
             return None
 
         self.samples_since_prediction = 0
-        return self._predict_current_window()
+        return self._predict_current_window(is_first_prediction=False)
 
-    def _predict_current_window(self) -> PredictionResult:
-        """Filter, featurise, and classify the most recent complete window."""
+    def _predict_current_window(self, is_first_prediction: bool) -> PredictionResult:
+        """Filter, featurise, classify, then update steps and transitions."""
 
         raw_window = np.stack(self.window_buffer, axis=0)
 
@@ -410,14 +523,148 @@ class InferenceEngine:
 
         activity = decode_model_class(prediction, self.bundle.classes)
         confidence = probabilities.get(activity, max(probabilities.values(), default=0.0))
+        created_at_ms = int(time.time() * 1000)
+
+        self._update_activity_state(activity, created_at_ms)
+        step_activity = self.stable_activity or activity
+        self._update_step_count(filtered_window, step_activity, is_first_prediction)
 
         return PredictionResult(
             activity=activity,
             confidence=confidence,
             probabilities=probabilities,
             latency_ms=(finished_ns - started_ns) / 1_000_000,
-            created_at_ms=int(time.time() * 1000),
+            created_at_ms=created_at_ms,
         )
+
+    def _update_activity_state(self, activity: str, created_at_ms: int) -> None:
+        """Stabilise predictions and record confirmed tracked transitions."""
+
+        now_elapsed = self.get_elapsed_seconds()
+
+        if self.stable_activity is None:
+            self.stable_activity = activity
+            self._clear_activity_candidate()
+            return
+
+        if activity == self.stable_activity:
+            self._clear_activity_candidate()
+            return
+
+        if activity != self.candidate_activity:
+            self.candidate_activity = activity
+            self.candidate_activity_count = 1
+            self.candidate_activity_started_at = now_elapsed
+            return
+
+        self.candidate_activity_count += 1
+
+        if self.candidate_activity_count < ACTIVITY_CONFIRMATION_WINDOWS:
+            return
+
+        previous_activity = self.stable_activity
+        transition_started_at = (
+            self.candidate_activity_started_at
+            if self.candidate_activity_started_at is not None
+            else now_elapsed
+        )
+
+        self.stable_activity = activity
+        self._clear_activity_candidate()
+        self._record_transition(
+            from_activity=previous_activity,
+            to_activity=activity,
+            started_at_elapsed_seconds=transition_started_at,
+            completed_at_elapsed_seconds=now_elapsed,
+            created_at_ms=created_at_ms,
+        )
+
+    def _clear_activity_candidate(self) -> None:
+        """Clear the temporary activity used during transition confirmation."""
+
+        self.candidate_activity = None
+        self.candidate_activity_count = 0
+        self.candidate_activity_started_at = None
+
+    def _record_transition(
+        self,
+        from_activity: str,
+        to_activity: str,
+        started_at_elapsed_seconds: float,
+        completed_at_elapsed_seconds: float,
+        created_at_ms: int,
+    ) -> None:
+        """Record a tracked transition after the new activity is confirmed."""
+
+        transition_pair = (from_activity, to_activity)
+
+        if transition_pair not in TRACKED_TRANSITIONS:
+            return
+
+        duration_seconds = max(
+            0.0,
+            completed_at_elapsed_seconds - started_at_elapsed_seconds,
+        )
+
+        event = TransitionEvent(
+            label=TRACKED_TRANSITIONS[transition_pair],
+            from_activity=from_activity,
+            to_activity=to_activity,
+            started_at_elapsed_seconds=started_at_elapsed_seconds,
+            completed_at_elapsed_seconds=completed_at_elapsed_seconds,
+            duration_seconds=duration_seconds,
+            created_at_ms=created_at_ms,
+        )
+
+        stats = self.transition_stats[transition_pair]
+        stats["count"] += 1
+        stats["total_duration_seconds"] += duration_seconds
+        stats["latest_duration_seconds"] = duration_seconds
+
+        self.transition_history.append(event)
+        print(
+            f"[TRANSITION] {event.label} "
+            f"duration={event.duration_seconds:.2f} s "
+            f"completed_at={event.completed_at_elapsed_seconds:.1f} s"
+        )
+
+    def _update_step_count(
+        self,
+        filtered_window: np.ndarray,
+        activity: str,
+        is_first_prediction: bool,
+    ) -> None:
+        """Count new knee-acceleration peaks while the model predicts walking."""
+
+        if activity != "walk":
+            return
+
+        knee_acceleration = filtered_window[:, 0:3]
+        magnitude = np.linalg.norm(knee_acceleration, axis=1)
+        dynamic_magnitude = magnitude - np.median(magnitude)
+
+        prominence = max(
+            MIN_STEP_PROMINENCE,
+            STEP_PROMINENCE_STD_MULTIPLIER * float(np.std(dynamic_magnitude)),
+        )
+        minimum_distance = max(
+            1,
+            int(round(MIN_STEP_INTERVAL_SECONDS * self.bundle.sampling_rate_hz)),
+        )
+
+        peaks, _ = find_peaks(
+            dynamic_magnitude,
+            distance=minimum_distance,
+            prominence=prominence,
+        )
+
+        new_region_start = (
+            0
+            if is_first_prediction
+            else self.bundle.window_size - self.bundle.window_step
+        )
+        new_steps = int(np.sum(peaks >= new_region_start))
+        self.step_count += new_steps
 
     def _predict_probabilities(self, features: np.ndarray) -> dict[str, float]:
         """Return class probabilities using the classifier's own class order."""
@@ -679,6 +926,27 @@ async def api_state_handler(_: web.Request) -> web.Response:
 
     prediction = state.last_prediction
     buffers = inference_engine.get_buffer_status() if inference_engine else {}
+    session_metrics = (
+        inference_engine.get_session_metrics()
+        if state.mode == ServerMode.INFERENCE and inference_engine is not None
+        else {
+            "elapsed_seconds": 0.0,
+            "step_count": 0,
+            "stable_activity": None,
+            "transition_count": 0,
+            "latest_transition": None,
+            "transition_summary": {
+                f"{from_activity}_to_{to_activity}": {
+                    "label": label,
+                    "count": 0,
+                    "latest_duration_seconds": None,
+                    "average_duration_seconds": None,
+                }
+                for (from_activity, to_activity), label in TRACKED_TRANSITIONS.items()
+            },
+            "transition_history": [],
+        }
+    )
 
     response = {
         "mode": state.mode.value,
@@ -694,6 +962,13 @@ async def api_state_handler(_: web.Request) -> web.Response:
         "sampling_rate_hz": SAMPLING_RATE_HZ,
         "current_user_id": state.current_user_id,
         "current_activity": state.current_activity,
+        "elapsed_seconds": session_metrics["elapsed_seconds"],
+        "step_count": session_metrics["step_count"],
+        "stable_activity": session_metrics["stable_activity"],
+        "transition_count": session_metrics["transition_count"],
+        "latest_transition": session_metrics["latest_transition"],
+        "transition_summary": session_metrics["transition_summary"],
+        "transition_history": session_metrics["transition_history"],
         "prediction": None,
     }
 
