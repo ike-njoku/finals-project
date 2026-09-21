@@ -17,9 +17,7 @@ from aiohttp import WSMsgType, web
 from scipy.signal import butter, find_peaks, sosfiltfilt
 
 
-# =============================================================================
-# PROJECT CONFIGURATION
-# =============================================================================
+# Config
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -58,10 +56,10 @@ ACTIVITY_CONFIRMATION_WINDOWS = 2
 
 # Activity changes reported as explicit mobility transitions.
 TRACKED_TRANSITIONS = {
-    ("sit", "stand"): "SIT → STAND",
-    ("stand", "sit"): "STAND → SIT",
-    ("stand", "walk"): "STAND → WALK",
-    ("walk", "stand"): "WALK → STAND",
+    ("sit", "stand"): "SIT - STAND",
+    ("stand", "sit"): "STAND - SIT",
+    ("stand", "walk"): "STAND - WALK",
+    ("walk", "stand"): "WALK - STAND",
 }
 
 CSV_HEADERS = (
@@ -79,10 +77,7 @@ CSV_HEADERS = (
 )
 
 
-# =============================================================================
-# DOMAIN TYPES
-# =============================================================================
-
+# Server states
 
 class ServerMode(str, Enum):
     """Operating modes supported by the proof-of-concept server."""
@@ -143,9 +138,9 @@ class ApplicationState:
     shutdown_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
-# =============================================================================
-# GENERAL HELPERS
-# =============================================================================
+
+# Helper Functions
+
 
 
 def normalise_node_name(node_name: str) -> str:
@@ -186,9 +181,7 @@ def get_next_user_id() -> str:
     return f"user_{next_number}"
 
 
-# =============================================================================
-# MODEL LOADING AND VALIDATION
-# =============================================================================
+# Load and Validate Model 
 
 
 def load_model_bundle(path: Path = MODEL_BUNDLE_PATH) -> ModelBundle:
@@ -261,9 +254,7 @@ def validate_model_bundle(bundle: ModelBundle) -> None:
         )
 
 
-# =============================================================================
-# RANDOM FOREST PREPROCESSING
-# =============================================================================
+# Process Random Forest
 
 
 def build_lowpass_filter(bundle: ModelBundle) -> np.ndarray:
@@ -327,9 +318,7 @@ def decode_model_class(raw_class: Any, classes: list[str]) -> str:
     return str(raw_class)
 
 
-# =============================================================================
-# LIVE INFERENCE ENGINE
-# =============================================================================
+# Run Live Inference
 
 
 class InferenceEngine:
@@ -681,10 +670,8 @@ class InferenceEngine:
         }
 
 
-# =============================================================================
-# DATA COLLECTION SERVICE
-# =============================================================================
 
+# Data Collection 
 
 class DataCollector:
     """Manage labelled CSV collection without leaking file logic into transport."""
@@ -786,10 +773,7 @@ class DataCollector:
         os.fsync(file_handle.fileno())
 
 
-# =============================================================================
-# APPLICATION SERVICES
-# =============================================================================
-
+# App
 
 state = ApplicationState()
 data_collector = DataCollector()
@@ -877,9 +861,7 @@ async def route_sensor_packet(
             )
 
 
-# =============================================================================
-# HTTP + WEBSOCKET ROUTES
-# =============================================================================
+# Http, Sockets, ROutes
 
 
 async def root_handler(request: web.Request) -> web.StreamResponse:
@@ -1000,9 +982,7 @@ def create_web_application() -> web.Application:
     return application
 
 
-# =============================================================================
-# TERMINAL MODE CONTROL
-# =============================================================================
+# Command line Interface
 
 
 async def wait_for_arduinos() -> None:
@@ -1130,9 +1110,7 @@ async def terminal_control_loop() -> None:
             print(f"Unknown selection: {selection!r}")
 
 
-# =============================================================================
-# SERVER LIFECYCLE
-# =============================================================================
+#Server Controls
 
 
 async def start_server() -> web.AppRunner:

@@ -10,7 +10,7 @@
 // #define WIFI_SSID     "ZWS Iphone"
 // #define WIFI_PASSWORD "zwsiphone"
 
-// Name of this specific sensor on your body ("Lumbar", "Thigh", or "Knee")
+// Name of this specific sensor  ("Lumbar", "Thigh", or "Knee")
 #define SENSOR_PLACEMENT "Knee" 
 
 // const char* websockets_server_host = "10.133.215.60"; 
@@ -72,15 +72,15 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
           sessionStarted = true;
           sampleCount = 0; 
           lastSampleTimeUs = micros(); 
-          Serial.println("==========================================");
-          Serial.println(" EXPERIMENT STARTED - STREAMING 50 Hz ");
-          Serial.println("==========================================");
+          Serial.println("------------------------------------------");
+          Serial.println(" Session Started, Streaming at 50 Hz ");
+          Serial.println("-------------------------------------------");
         } 
         else if (strcmp(command, "STOP") == 0) {
           sessionStarted = false;
-          Serial.println("==========================================");
-          Serial.println(" EXPERIMENT STOPPED - STREAMING PAUSED ");
-          Serial.println("==========================================");
+          Serial.println("-----------------------------------------------");
+          Serial.println(" Session Stopped ");
+          Serial.println("-----------------------------------------------");
         }
       }
       break;
@@ -128,8 +128,8 @@ void setup() {
   Wire.begin();
   Wire.setClock(400000); // OPTIMIZATION: Boost I2C speed to 400 kHz
 
-  // --------------------------------------------------------------------------
-  // HARDWARE DATA RATE (ODR = Output Data Rate)
+  
+  // Hardware data rate (ODR = Output Data Rate)
   // Set internal hardware rate to 104 Hz so new readings are ready twice 
   // as fast as our 50 Hz timer (every ~9.6ms vs our 20ms check).
   // --------------------------------------------------------------------------
